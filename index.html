@@ -1034,6 +1034,9 @@ function scrollsEventLog(event, eID, battle) {
 }
 
 function riftEventLog(event, eID, battle) {
+	
+	eID = Number(eID); //typecast as number
+
 	if (event.length != 4) return false;
 	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Deck .*origin: SummoningRift.play\\)";
 	if (event[0].search(pattern) == -1) return false;
@@ -1044,11 +1047,13 @@ function riftEventLog(event, eID, battle) {
 	
 	var lookAhead = 1;
 	var nEvent = battle.events[eID+lookAhead];
-	while (nEvent[0].search(pattern) > -1) {
-		cardNum = RegExp.$1;
-		cardName = RegExp.$2;
-		ret += ", "+WoO.numAndName(cardNum,cardName);
-		delete battle.events[eID+1];
+	if(nEvent){
+		while (nEvent[0].search(pattern) > -1) {
+			cardNum = RegExp.$1;
+			cardName = RegExp.$2;
+			ret += ", "+WoO.numAndName(cardNum,cardName);
+			delete battle.events[eID+1];
+		}
 	}
 	return ret+"<br>";
 }
