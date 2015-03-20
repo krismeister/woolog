@@ -581,15 +581,15 @@ function deactPlayEventLog(event, eID, battle) {
 // Shrine of Rebirth doesn't show in the log; it only shows up as 3 EffectJobs in a row.
 function rebirthEvent(event,eID,battle) {
 	var pattern = "\\|EffectJob\\|";
-	var nEvent0 = battle.events[+eID+0];
-	var nEvent1 = battle.events[+eID+1];
-	var nEvent2 = battle.events[+eID+2];
+	var nEvent0 = battle.events[eID+0];
+	var nEvent1 = battle.events[eID+1];
+	var nEvent2 = battle.events[eID+2];
 	if (   nEvent0 && nEvent0[0].search(pattern) > -1
 		&& nEvent1 && nEvent1[0].search(pattern) > -1
 		&& nEvent2 && nEvent2[0].search(pattern) > -1) {
-		delete battle.events[+eID+0];
-		delete battle.events[+eID+1];
-		delete battle.events[+eID+2];
+		delete battle.events[eID+0];
+		delete battle.events[eID+1];
+		delete battle.events[eID+2];
 		return true;
 	}
 	return false;
@@ -628,13 +628,13 @@ function attackEventLog(event, eID, battle) {
 	var idx = event[0].search("\\|AttackJob\\|");
 	if (idx == -1) return false;
 	// DamageJob seems to always follow this.
-	var event1 = battle.events[+eID+1];
+	var event1 = battle.events[eID+1];
 	if (!event1 || event1[0].search("\\|DamageJob\\|") == -1) return false;
-	delete battle.events[+eID+1];
+	delete battle.events[eID+1];
 	// SpendSkullJob *sometimes* follows this.
-	var event2 = battle.events[+eID+2];
+	var event2 = battle.events[eID+2];
 	if (event2 && event2[0].search("\\|SpendSkullJob\\|") > -1)
-		delete battle.events[+eID+2];
+		delete battle.events[eID+2];
 	var ret = WoO.eventLine(battle,ef.attack);
 	return ret + "<br>";
 }
@@ -645,10 +645,10 @@ function gainResEventLog(event, eID, battle) {
 	if (idx == -1) return false;
 	var resCount = 1;
 	while (idx > -1) {
-		var nextEvent = battle.events[+eID+resCount];
+		var nextEvent = battle.events[eID+resCount];
 		idx = nextEvent && nextEvent[0].search("\\|GainResourceJob\\|");
 		if (idx > -1) {
-			delete battle.events[+eID+resCount];
+			delete battle.events[eID+resCount];
 			resCount++;
 		}
 	}
@@ -670,10 +670,10 @@ function stealResEventLog(event, eID, battle) {
 	if (idx == -1) return false;
 	var resCount = 1;
 	while (idx > -1) {
-		var nextEvent = battle.events[+eID+resCount];
+		var nextEvent = battle.events[eID+resCount];
 		idx = nextEvent && nextEvent[0].search("\\|StealResourceJob\\|");
 		if (idx > -1) {
-			delete battle.events[+eID+resCount];
+			delete battle.events[eID+resCount];
 			resCount++;
 		}
 	}
@@ -801,10 +801,10 @@ function playEventLog(event, eID, battle) {
 	var stopLooking = (card && card.playEffects.indexOf(ef.destroy) > -1);
 	var lookAhead = 1;
 	while (!moveEventFound && !stopLooking && lookAhead < 1000) {
-		var nEvent = battle.events[+eID+lookAhead];
+		var nEvent = battle.events[eID+lookAhead];
 		if (nEvent && nEvent[2] && nEvent[0].search("remove card: "+cardNum+" ") > -1) {
 			moveEventFound = true;
-			delete battle.events[+eID+lookAhead];
+			delete battle.events[eID+lookAhead];
 		}
 		
 		if (rebirthEvent(event,+eID+lookAhead,battle)) {
@@ -812,7 +812,7 @@ function playEventLog(event, eID, battle) {
 			return ret + "<br>";
 		}
 
-//		stopLooking = !nEvent && !battle.events[+eID+lookAhead+1]; // "conjured" cards cause an event# to skip
+//		stopLooking = !nEvent && !battle.events[eID+lookAhead+1]; // "conjured" cards cause an event# to skip
 		// Otherwise, skip a (rather long) list of other effects.
 		if (!stopLooking && nEvent)
 			stopLooking =
@@ -859,9 +859,9 @@ function playEventLog(event, eID, battle) {
 function chargeEventLog(event, eID, battle) {
 	if (event[0].search("\\|UpdateChargesJob\\|") == -1) return false;
 	// Sometimes there's an effect, too.
-	var event1 = battle.events[+eID+1];
+	var event1 = battle.events[eID+1];
 	if (event1 && event1[0].search("\\|EffectJob\\|") > -1)
-		delete battle.events[+eID+1];
+		delete battle.events[eID+1];
 	return "Something changed charges..."+"<br>";
 }
 
@@ -870,9 +870,9 @@ function chargeEventLog(event, eID, battle) {
  */
  function feedEventLog(event, eID, battle) {
 	if (event[0].search("\\|FeedJob\\|") == -1) return false;
-	var event1 = battle.events[+eID+1];
+	var event1 = battle.events[eID+1];
 	if (!event1 || event1[0].search("\\|SpendFoodJob\\|") == -1) return false;
-	delete battle.events[+eID+1];
+	delete battle.events[eID+1];
 	var who = battle.curPlayer;
 	return who+" fed something..."+"<br>";
 }
@@ -880,15 +880,15 @@ function chargeEventLog(event, eID, battle) {
 // As with feed, but the thing fed apparently has charges (e.g. Warding Circle).
 function pumpEventLog(event, eID, battle) {
 	if (event[0].search("\\|FeedJob\\|") == -1) return false;
-	var event1 = battle.events[+eID+1];
+	var event1 = battle.events[eID+1];
 	if (!event1 || event1[0].search("\\|UpdateChargesJob\\|") == -1) return false;
-	var event2 = battle.events[+eID+2];
+	var event2 = battle.events[eID+2];
 	if (!event2 || event2[0].search("\\|EffectJob\\|") == -1) return false;
-	var event3 = battle.events[+eID+3];
+	var event3 = battle.events[eID+3];
 	if (!event3 || event3[0].search("\\|SpendFoodJob\\|") == -1) return false;
-	delete battle.events[+eID+1];
-	delete battle.events[+eID+2];
-	delete battle.events[+eID+3];
+	delete battle.events[eID+1];
+	delete battle.events[eID+2];
+	delete battle.events[eID+3];
 	var who = battle.curPlayer;
 	return who+" pumped something..."+"<br>";
 }
@@ -896,18 +896,18 @@ function pumpEventLog(event, eID, battle) {
 // This happens when an ally is pumped. Slightly different event series.
 function pumpAllyEventLog(event, eID, battle) {
 	if (event[0].search("\\|FeedJob\\|") == -1) return false;
-	var event1 = battle.events[+eID+1];
+	var event1 = battle.events[eID+1];
 	if (!event1 || event1[0].search("\\|UpdateChargesJob\\|") == -1) return false;
-	var event2 = battle.events[+eID+2];
+	var event2 = battle.events[eID+2];
 	if (!event2 || event2[0].search("\\|EffectJob\\|") == -1) return false;
-	var event3 = battle.events[+eID+3];
+	var event3 = battle.events[eID+3];
 	if (!event3 || event3[0].search("\\|HealJob\\|") == -1) return false;
-	var event4 = battle.events[+eID+4];
+	var event4 = battle.events[eID+4];
 	if (!event4 || event4[0].search("\\|SpendFoodJob\\|") == -1) return false;
-	delete battle.events[+eID+1];
-	delete battle.events[+eID+2];
-	delete battle.events[+eID+3];
-	delete battle.events[+eID+4];
+	delete battle.events[eID+1];
+	delete battle.events[eID+2];
+	delete battle.events[eID+3];
+	delete battle.events[eID+4];
 	var who = battle.curPlayer;
 	return who+" pumped an ally..."+"<br>";
 }
@@ -950,10 +950,10 @@ function summonEventLog(event, eID, battle) {
 	
 	var count = 1;
 	while (idx > -1) {
-		var nextEvent = battle.events[+eID+(count*2)];
+		var nextEvent = battle.events[eID+(count*2)];
 		idx = nextEvent && nextEvent[0].search(pattern);
 		if (idx > -1) {
-			delete battle.events[+eID+(count*2)];
+			delete battle.events[eID+(count*2)];
 			count++;
 		}
 	}
@@ -977,7 +977,7 @@ function ransackEventLog(event, eID, battle) {
 	var who;
 	pattern = "remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Hand .*origin: Ransack.process\\)"; 
 	while (!stopLooking && lookAhead < 1000) {
-		var nEvent = battle.events[+eID+lookAhead];
+		var nEvent = battle.events[eID+lookAhead];
 		var idx = nEvent && nEvent[0].search(pattern);
 		if (idx > -1) {
 			cardNum = RegExp.$1;
@@ -987,16 +987,16 @@ function ransackEventLog(event, eID, battle) {
 				ret += who+" discards ";
 			ret += WoO.numAndName(cardNum,cardName)+", ";
 			saidDiscard = true;
-			delete battle.events[+eID+lookAhead];
+			delete battle.events[eID+lookAhead];
 		}
 		if (nEvent && nEvent[0].search("\\|ChangeOwnerJob\\|") > -1) {
 			stopLooking = true;
-			delete battle.events[+eID+lookAhead];
+			delete battle.events[eID+lookAhead];
 		}
 		lookAhead++;
 	}
 	// The next card played has changed owners. Don't delete that playEvent though.
-	while (!isPlayEvent(battle.events[+eID+lookAhead])) lookAhead++;
+	while (!isPlayEvent(battle.events[eID+lookAhead])) lookAhead++;
 	cardNum = RegExp.$1;
 	cardName = RegExp.$2;
 	ret += "keeps "+ WoO.numAndName(cardNum,cardName);
@@ -1017,16 +1017,16 @@ function scrollsEventLog(event, eID, battle) {
 	if (origin != "SibyllineScrolls.process" && origin != "CullTheHerd.process") return false;
 	var ret = who+" discards "+WoO.numAndName(cardNum,cardName)+", ";
 
-	var nEvent = battle.events[+eID+1];
+	var nEvent = battle.events[eID+1];
 	var idx = nEvent[0].search(pattern);
 	cardNum = RegExp.$1;
 	cardName = RegExp.$2;
 	ret += WoO.numAndName(cardNum,cardName)+", ";
-	delete battle.events[+eID+1];
+	delete battle.events[eID+1];
 
 	// The next card played was the chosen one. Don't delete that playEvent though.
 	var lookAhead = 2;
-	while (!isPlayEvent(battle.events[+eID+lookAhead])) lookAhead++;
+	while (!isPlayEvent(battle.events[eID+lookAhead])) lookAhead++;
 	cardNum = RegExp.$1;
 	cardName = RegExp.$2;
 	ret += "chooses "+ WoO.numAndName(cardNum,cardName);
@@ -1043,12 +1043,12 @@ function riftEventLog(event, eID, battle) {
 	var ret = who+" summons "+WoO.numAndName(cardNum,cardName);
 	
 	var lookAhead = 1;
-	var nEvent = battle.events[+eID+lookAhead];
+	var nEvent = battle.events[eID+lookAhead];
 	while (nEvent[0].search(pattern) > -1) {
 		cardNum = RegExp.$1;
 		cardName = RegExp.$2;
 		ret += ", "+WoO.numAndName(cardNum,cardName);
-		delete battle.events[+eID+1];
+		delete battle.events[eID+1];
 	}
 	return ret+"<br>";
 }
