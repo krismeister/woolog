@@ -1,0 +1,1174 @@
+<meta content="text/html;charset=utf-8" http-equiv="Content-Type">
+<meta content="utf-8" http-equiv="encoding">
+<!-- An attempt to rewrite a War of Omens log file for players to read.
+2015 March, by BuddyPharaoh @ Kongregate.
+This is being written while I continue to puzzle out the log, fishing out patterns.
+Bad code organization below results from me attempting to decode the log and prototype
+at the same time.
+-->
+<html>
+<head>
+<title> War of Omens Log Viewer </title>
+<style>
+body { font-family: sans-serif; }
+input#logPath { margin: 10px; }
+div#errorBox {border: 1px solid; border-color: #ffcccc; background-color: #ffcccc;
+  margin:10px 0px;}
+div#errorText { margin:5px; }
+span.V{color:#008800;}
+span.D{color:#aa0000;}
+span.M{color:#0000aa;}
+span.E{color:#aa00aa;}
+span.N{color:#666666;}
+</style>
+</head>
+<body>
+<div id="errorBox">
+<div id="errorText">foo</div>
+</div>
+Select your log file. (This should be what you chose after you typed "log" 
+in War of Omens.)
+<br>
+<input type="file" id="logPath" size="50" value="d:/bin/Firefox"/>
+<br>
+<button id="load" onclick="buttonLoad()">Reread it</button>
+<hr>
+<div id="log">
+The log will be here.
+</div>
+
+<script type="text/javascript">
+// Check for the various File API support.
+if (window.File && window.FileReader && window.FileList && window.Blob) {
+ 	document.getElementById("logPath").addEventListener("change",readLogFile,false);
+ 	document.getElementById("errorText").innerHTML = "";
+} else {
+	document.getElementById("errorText").innerHTML =
+  		"The File APIs are not fully supported by your browser. Without this,"+
+  		" I think I won't be able to read your WoO log file. Sorry.";
+}
+
+var ef = {
+	attack    : "Someone is attacked!",
+	resLose   : "$other loses a resource",
+	stock     : "$player bank stocks $card",
+	play      : "$player plays $card",
+	toHand    : "$card goes to $player hand",
+	cardSteal : "$player steals $card from $other's hand!",
+	deactHand : "$card leaves $from's hand for $owner's inventory",
+	deactPlay : "$card leaves $from's $area for $owner's inventory",
+	destroy   : "$card is destroyed",
+};
+function Effect(eff,action,cause) {
+	this.effect = eff;
+	this.action = action;
+	this.cause = cause;
+}
+function Card(name, faction, cardTypeFun, buyEffects, playEffects) {
+	this.name = name;
+	this.fctFun = faction;
+	this.buyEffects = buyEffects;
+	this.playEffects = playEffects ? playEffects : [];
+	this.cardType = cardTypeFun;
+	cardTypeFun(this);
+}
+var WoO = {
+	effects : [], // this really should be a field in the battle object instead
+};
+WoO.name = function(card) {
+	var tCard = (typeof card == "string") ? gameCards[card] : card;
+	// var card = gameCards[cName];
+	if (tCard) return tCard.fctFun(tCard.name);
+	return card;
+};
+WoO.numAndName = function(cNum,cName) {
+	return "#"+cNum+" ("+WoO.name(cName)+")";
+};
+WoO._queueEffects = function(cName,effType,action) {
+	var card = gameCards[cName];
+	if (!card) return;
+	for (eff in card[effType])
+		WoO.effects.push(new Effect(card[effType][eff],action,card));
+}
+WoO.queueBuyEffects  = function(cName) { WoO._queueEffects(cName,"buyEffects", "buy"); }
+WoO.queuePlayEffects = function(cName) { WoO._queueEffects(cName,"playEffects","play"); }
+WoO.eventLine = function(battle,efName,cNum,cName,cardOwner,fromPlayer,fromArea){
+	var effect = WoO.dequeueEffect(efName);
+	var causeStr = (effect) ? WoO.name(effect.cause)+" "+effect.action+" causes: " : "";
+	var eventStr = efName;
+	if (!cardOwner) cardOwner = battle.curPlayer;
+	var curPlayer = battle.curPlayer ? battle.curPlayer : cardOwner;
+	if (!fromPlayer) fromPlayer = "(someone?)"; 
+	eventStr = eventStr.replace("$other", (curPlayer=="Player")?"Foe":"Player");
+	eventStr = eventStr.replace("$player",(curPlayer=="Player")?"Player":"Foe");
+	eventStr = eventStr.replace("$owner", cardOwner);
+	eventStr = eventStr.replace("$from", fromPlayer);
+	eventStr = eventStr.replace("$area", fromArea);
+	eventStr = eventStr.replace("$card",  WoO.numAndName(cNum,cName));
+	return causeStr + eventStr;
+}
+WoO.dequeueEffect = function(efName){
+	// inefficient search, but I don't expect WoO.effects to ever be long
+	for (eff in WoO.effects) {
+		if (WoO.effects[eff].effect == efName) {
+			var effect = WoO.effects[eff];
+			delete WoO.effects[eff];
+			return effect;
+		}
+	}
+	return null;
+}
+
+function Ally(card) { if (card.buyEffects.indexOf(ef.toHand) == -1) card.buyEffects.push(ef.play); }
+function Artifact(card) { card.buyEffects.push(ef.play); } // non-Allies that go on the field
+function Summon(card) { }
+function Spell(card) {
+	card.buyEffects.push(ef.play);
+	card.playEffects.push((card.fctFun==Metris)?ef.destroy:ef.deactHand);
+}
+function Incant(card) { card.buyEffects.push(ef.toHand); }
+function Coin(card) { }
+
+function Vespit(str) { return "<span class='V'>" + str + "</span>"; }
+function Darame(str) { return "<span class='D'>" + str + "</span>"; }
+function Metris(str) { return "<span class='M'>" + str + "</span>"; }
+function Endazu(str) { return "<span class='E'>" + str + "</span>"; }
+function NoFact(str) { return "<span class='N'>" + str + "</span>"; }
+
+// List is complete; effects are not.
+var gameCards = { // logname : name, faction, cardType, buyEff, playEff
+	"Diviner Charms"   : new Card("Diviner Charms",   NoFact, Coin, []),
+	"Wishing Coin"     : new Card("Wishing Coin",     NoFact, Coin, []),
+	"Cross and Pile"   : new Card("Cross and Pile",   NoFact, Coin, []),
+	"Fecund Charm"     : new Card("Fecund Charm",     NoFact, Coin, []),
+	"Ferryman's Toll"  : new Card("Ferryman's Toll",  NoFact, Coin, []),
+	"Fool's Geld"      : new Card("Fool's Geld",      NoFact, Coin, []),
+	"Serpent's Seal"   : new Card("Serpent's Seal",   NoFact, Coin, []),
+	"Swindler's Mark"  : new Card("Swindler's Mark",  NoFact, Coin, []),
+	"Obol Cornucopia"  : new Card("Obol Cornucopia",  NoFact, Coin, []),
+	"Bantling Crown"   : new Card("Bantling Crown",   NoFact, Coin, []),
+	"Vicar Doubloon"   : new Card("Vicar Doubloon",   NoFact, Coin, []),
+	"Champion's Piaza" : new Card("Champion's Piaza", NoFact, Coin, []),
+	"Wergeld Seax"     : new Card("Wergeld Seax",     NoFact, Coin, []),
+	"Humble Offering"  : new Card("Humble Offering",  NoFact, Coin, []),
+	"Graveline Drachm" : new Card("Graveline Drachm", NoFact, Coin, []),
+	"Berserkr"         : new Card("Berserkr",         NoFact, Ally, []),
+	"Cattle"           : new Card("Cattle",           NoFact, Ally, []),
+	"Fire Ship"        : new Card("Fire Ship",        NoFact, Ally, []),
+	"Conjured Argoreth": new Card("Conjured Argoreth",NoFact, Ally, []),
+	"Ballista"         : new Card("Ballista",         Vespit, Ally, []),
+	"Catapult"         : new Card("Catapult",         Vespit, Ally, []),
+	"Militia"          : new Card("Militia",          Vespit, Ally, []),
+	"Mercenary"        : new Card("Mercenary",        Vespit, Ally, []),
+	"Soldier"          : new Card("Soldier",          Vespit, Ally, []),
+	"Knight"           : new Card("Knight",           Vespit, Ally, []),
+	"Marshal"          : new Card("Marshal",          Vespit, Ally, []),
+	"Courtesan"        : new Card("Courtesan",        Vespit, Ally, []),
+	"Serf"             : new Card("Serf",             Vespit, Ally, []),
+	"Vintner"          : new Card("Vintner",          Vespit, Ally, []),
+	"Bureaucrat"       : new Card("Bureaucrat",       Vespit, Ally, []),
+	"Supplicant"       : new Card("Supplicant",       Vespit, Ally, []),
+	"Wealthy Patron"   : new Card("Wealthy Patron",   Vespit, Ally, []),
+	"Bishop"           : new Card("Bishop",           Vespit, Ally, []),
+	"Banker"           : new Card("Banker",           Vespit, Ally, []),
+	"Inquisitor"       : new Card("Inquisitor",       Vespit, Ally, []),
+	"Warship"          : new Card("Warship",          Vespit, Ally, []),
+	"Loan"             : new Card("Loan",             Vespit, Artifact, []),
+	"Usury"            : new Card("Usury",            Vespit, Artifact, []),
+	"Synod"            : new Card("Synod",            Vespit, Artifact, []),
+	"Palisade"         : new Card("Palisade",         Vespit, Artifact, []),
+	"Rampart"          : new Card("Rampart",          Vespit, Artifact, []),
+	"Merchant Guild"   : new Card("Merchant Guild",   Vespit, Spell, []),
+	"Corruption"       : new Card("Corruption",       Vespit, Spell, []),
+	"Holy Wrath"       : new Card("Holy Wrath",       Vespit, Spell, []),
+	"Tithe"            : new Card("Tithe",            Vespit, Spell, []),
+	"Harvest"          : new Card("Harvest",          Vespit, Spell, []),
+	"Spy Network"      : new Card("Spy Network",      Vespit, Spell, []),
+	"Liturgy"          : new Card("Liturgy",          Vespit, Spell, []),
+	"Tribute"          : new Card("Tribute",          Vespit, Spell, []),
+	"Embargo"          : new Card("Embargo",          Vespit, Spell, []),
+	"Collect Taxes"    : new Card("Collect Taxes",    Vespit, Spell, []),
+	"Spice Route"      : new Card("Spice Route",      Vespit, Spell, []),
+	"Courtly Intrigue" : new Card("Courtly Intrigue", Vespit, Spell, []),
+	"Prayer"           : new Card("Prayer",           Vespit, Spell, []),
+	"Fief"             : new Card("Fief",             Vespit, Spell, []),
+	"Trade Company"    : new Card("Trade Company",    Vespit, Spell, []),
+	"Masquerade Ball"  : new Card("Masquerade Ball",  Vespit, Spell, []),
+	"Devotion"         : new Card("Devotion",         Vespit, Spell, []),
+	"Malediction"      : new Card("Malediction",      Vespit, Spell, []),
+	"Benediction"      : new Card("Benediction",      Vespit, Spell, []),
+	"Lead the Charge"  : new Card("Lead the Charge",  Vespit, Spell, []),
+	"Bounty"           : new Card("Bounty",           Vespit, Spell, []),
+	"Sibylline Scrolls": new Card("Sibylline Scrolls",Vespit, Spell, []),
+	"Miracle"          : new Card("Miracle",          Vespit, Spell, []),
+	"Herd of Rats"     : new Card("Herd of Rats",     Darame, Ally, []),
+	"Herd of Goats"    : new Card("Herd of Goats",    Darame, Ally, []),
+	"Herd of Boars"    : new Card("Herd of Boars",    Darame, Ally, []),
+	"Herd of Aurochs"  : new Card("Herd of Aurochs",  Darame, Ally, []),
+	"War Rat"          : new Card("War Rat",          Darame, Ally, []),
+	"Goat Outrider"    : new Card("Goat Outrider",    Darame, Ally, []),
+	"Dire Boar"        : new Card("Dire Boar",        Darame, Ally, []),
+	"Colossal Aurochs" : new Card("Colossal Aurochs", Darame, Ally, []),
+	"Lepers"           : new Card("Lepers",           Darame, Ally, []),
+	"Scavengers"       : new Card("Scavengers",       Darame, Ally, []),
+	"Gold Panners"     : new Card("Gold Panners",     Darame, Ally, []),
+	"Orphan Gang"      : new Card("Orphan Gang",      Darame, Ally, []),
+	"Starving Mob"     : new Card("Starving Mob",     Darame, Ally, []),
+	"Sacrificial Lamb" : new Card("Sacrificial Lamb", Darame, Ally, []),
+	"Rat Catcher"      : new Card("Rat Catcher",      Darame, Ally, []),
+	"Scrivener"        : new Card("Scrivener",        Darame, Ally, []),
+	"Overseer"         : new Card("Overseer",         Darame, Ally, []),
+	"Shepherd"         : new Card("Shepherd",         Darame, Ally, []),
+	"Rite of Passage"  : new Card("Rite of Passage",  Darame, Artifact, []),
+	"Rite of Combat"   : new Card("Rite of Combat",   Darame, Artifact, []),
+	"Rite of Brood"    : new Card("Rite of Brood",    Darame, Artifact, []),
+	"Ceremonial Dance" : new Card("Ceremonial Dance", Darame, Artifact, []),
+	"Serpent Altar"    : new Card("Serpent Altar",    Darame, Artifact, []),
+	"Sacrificial Dais" : new Card("Sacrificial Dais", Darame, Artifact, []),
+	"Shrine of Rebirth": new Card("Shrine of Rebirth",Darame, Artifact, []),
+	"Herding Stones"   : new Card("Herding Stones",   Darame, Artifact, []),
+	"Boar Fetish"      : new Card("Boar Fetish",      Darame, Artifact, []),
+	"Shepherd's Gift"  : new Card("Shepherd's Gift",  Darame, Artifact, []),
+	"Sacred Tortoise"  : new Card("Sacred Tortoise",  Darame, Artifact, []),
+	"Guthrak's Midden" : new Card("Guthrak's Midden", Darame, Artifact, []),
+	"Rat Ointment"     : new Card("Rat Ointment",     Darame, Spell, []),
+	"Goat Poultice"    : new Card("Goat Poultice",    Darame, Spell, []),
+	"Boar Unguent"     : new Card("Boar Unguent",     Darame, Spell, []),
+	"Aurochs Elixir"   : new Card("Aurochs Elixir",   Darame, Spell, []),
+	"Ritual Slaughter" : new Card("Ritual Slaughter", Darame, Spell, []),
+	"Fertility Offering": new Card("Fertility Offering",Darame, Spell, []),
+	"Cull the Herd"    : new Card("Cull the Herd",    Darame, Spell, []),
+	"Bloodlust"        : new Card("Bloodlust",        Darame, Spell, []),
+	"Carnage"          : new Card("Carnage",          Darame, Spell, []),
+	"Stampede"         : new Card("Stampede",         Darame, Spell, []),
+	"Festival"         : new Card("Festival",         Darame, Spell, [],[ef.stock]),
+	"Feast"            : new Card("Feast",            Darame, Spell, []),
+	"Repopulate"       : new Card("Repopulate",       Darame, Spell, []),
+	"Assassin"         : new Card("Assassin",         Metris, Ally, []),
+	"Apothecary"       : new Card("Apothecary",       Metris, Ally, []),
+	"Brute"            : new Card("Brute",            Metris, Ally, []),
+	"Bodyguard"        : new Card("Bodyguard",        Metris, Ally, []),
+	"Charlatan"        : new Card("Charlatan",        Metris, Ally, []),
+	"Cutpurse"         : new Card("Cutpurse",         Metris, Ally, []),
+	"Informant"        : new Card("Informant",        Metris, Ally, [ef.stock]),
+	"Lackey"           : new Card("Lackey",           Metris, Ally, [], [ef.stock]),
+	"Tavern Wench"     : new Card("Tavern Wench",     Metris, Ally, []),
+	"Belladonna"       : new Card("Belladonna",       Metris, Artifact, []),
+	"Hemlock"          : new Card("Hemlock",          Metris, Artifact, []),
+	"Arsenic"          : new Card("Arsenic",          Metris, Artifact, []),
+	"Misdirect"        : new Card("Misdirect",        Metris, Artifact, []),
+	"Frame"            : new Card("Frame",            Metris, Artifact, []),
+	"Embezzle"         : new Card("Embezzle",         Metris, Artifact, []),
+	"Infiltrate"       : new Card("Infiltrate",       Metris, Artifact, []),
+	"Subterfuge"       : new Card("Subterfuge",       Metris, Artifact, []),
+	"Consolidate"      : new Card("Consolidate",      Metris, Artifact, []),
+	"Reconnaissance"   : new Card("Reconnaissance",   Metris, Artifact, []),
+	"Surveillance"     : new Card("Surveillance",     Metris, Artifact, []),
+	"Clever Planning"  : new Card("Clever Planning",  Metris, Artifact, []),
+	"Stolen Plans"     : new Card("Stolen Plans",     Metris, Artifact, []),
+	"Stratagem"        : new Card("Stratagem",        Metris, Artifact, []),
+	"Satchel Bomb"     : new Card("Satchel Bomb",     Metris, Artifact, []),
+	"Barrel Bomb"      : new Card("Barrel Bomb",      Metris, Artifact, []),
+	"Wagon Bomb"       : new Card("Wagon Bomb",       Metris, Artifact, []),
+	"Forgery"          : new Card("Forgery",          Metris, Artifact, []),
+	"Undermine"        : new Card("Undermine",        Metris, Artifact, []),
+	"Burglary"         : new Card("Burglary",         Metris, Spell, [], []),
+	"Coup de Grâce"    : new Card("Coup de Grâce",    Metris, Spell, [], []),
+	"Curry Favor"      : new Card("Curry Favor",      Metris, Spell, [], []),
+	"Infighting"       : new Card("Infighting",       Metris, Spell, [], []),
+	"Misinformation"   : new Card("Misinformation",   Metris, Spell, [], [ef.destroy]),
+	"Deceit"           : new Card("Deceit",           Metris, Spell, [], []),
+	"Arson"            : new Card("Arson",            Metris, Spell, [], []),
+	"Ambush"           : new Card("Ambush",           Metris, Spell, [], []),
+	"Waylay"           : new Card("Waylay",           Metris, Spell, [], []),
+	"Seduce"           : new Card("Seduce",           Metris, Spell, [], []),
+	"Mayhem"           : new Card("Mayhem",           Metris, Spell, [], []),
+	"Ransack"          : new Card("Ransack",          Metris, Spell, [], []),
+	"Coordinate"       : new Card("Coordinate",       Metris, Spell, [], []),
+	"Impersonate"      : new Card("Impersonate",      Metris, Spell, [], [ef.cardSteal]),
+	"Robbery"          : new Card("Robbery",          Metris, Spell, [], [/*ef.stealRes?*/]),
+	"Sabotage"         : new Card("Sabotage",         Metris, Spell, [], [ef.attack, ef.resLose, ef.resLose]),
+	"Behold the Veil"  : new Card("Behold the Veil",  Endazu, Incant, []),
+	"Banishing Gust"   : new Card("Banishing Gust",   Endazu, Incant, []),
+	"Word of Unmaking" : new Card("Word of Unmaking", Endazu, Incant, []),
+	"Cantillation"     : new Card("Cantillation",     Endazu, Incant, []),
+	"Poem of Blight"   : new Card("Poem of Blight",   Endazu, Incant, []),
+	"Song of Spring"   : new Card("Song of Spring",   Endazu, Incant, []),
+	"Odashir's Echo"   : new Card("Odashir's Echo",   Endazu, Incant, []),
+	"Summoning Rift"   : new Card("Summoning Rift",   Endazu, Incant, []),
+	"Whispered Barbs"  : new Card("Whispered Barbs",  Endazu, Incant, []),
+	"Golem"            : new Card("Golem",            Endazu, Ally, []),
+	"Ibshuk"           : new Card("Ibshuk",           Endazu, Ally, []),
+	"Bishmog"          : new Card("Bishmog",          Endazu, Ally, []),
+	"The Yarakeen"     : new Card("The Yarakeen",     Endazu, Ally, []),
+	"Underworld Barge" : new Card("Underworld Barge", Endazu, Ally, []),
+	"Veil Warden"      : new Card("Veil Warden",      Endazu, Ally, []),
+	"Zamgizar"         : new Card("Zamgizar",         Endazu, Ally, []),
+	"Twilight Peacock" : new Card("Twilight Peacock", Endazu, Ally, [ef.toHand]),
+	"Argoreth Flower"  : new Card("Argoreth Flower",  Endazu, Ally, [ef.toHand]),
+	"Gilded General"   : new Card("Gilded General",   Endazu, Ally, [ef.toHand]),
+	"Gilded Scribes"   : new Card("Gilded Scribes",   Endazu, Ally, [ef.toHand]),
+	"Gilded Warriors"  : new Card("Gilded Warriors",  Endazu, Ally, [ef.toHand]),
+	"Hedge Guardian"   : new Card("Hedge Guardian",   Endazu, Ally, [ef.toHand]),
+	"Conjured Warrior" : new Card("Conjured Warrior", Endazu, Summon, []),
+	"Grave Contract"   : new Card("Grave Contract",   Endazu, Artifact, []),
+	"Blood Pact"       : new Card("Blood Pact",       Endazu, Artifact, []),
+	"Engraved Urn"     : new Card("Engraved Urn",     Endazu, Artifact, []),
+	"Empowering Seal"  : new Card("Empowering Seal",  Endazu, Artifact, []),
+	"Scroll of Petals" : new Card("Scroll of Petals", Endazu, Artifact, []),
+	"Unstable Runes"   : new Card("Unstable Runes",   Endazu, Artifact, []),
+	"Lantern Scroll"   : new Card("Lantern Scroll",   Endazu, Artifact, []),
+	"Enchanted Treaty" : new Card("Enchanted Treaty", Endazu, Artifact, []),
+	"Halting Rebuke"   : new Card("Halting Rebuke",   Endazu, Artifact, [ef.toHand]), // yes, it's an Incant, but it stays in play...
+	"Merchant of Time" : new Card("Merchant of Time", Endazu, Artifact, []),
+	"Tome of Memory"   : new Card("Tome of Memory",   Endazu, Artifact, []),
+	"Warding Circle"   : new Card("Warding Circle",   Endazu, Artifact, []),
+};
+var cardNumbers = {
+//	 73 : Darame("Goat Outrider"),
+	134 : Metris("Arson"),
+//	259 : Darame("Lepers"),
+ 	281 : "Ferryman's Toll",
+ 	284 : "Wishing Coin",
+ 	285 : "Cross and Pile",
+ 	286 : "Serpent's Seal",
+	288 : "Diviner Charms",
+	290 : "Swindler's Mark",
+	291 : Vespit("Ducat"),
+	292 : Darame("Tauri"),
+	293 : Metris("Ducat"),
+	495 : Endazu("Ducat"), 
+	496 : "Fecund Charm",
+ 	608 : "Wergeld Seax",
+};
+
+function buttonLoad() {
+	var logPath = document.getElementById("logPath").value;
+	readLogFile();
+}
+
+function readLogFile(evt) {
+	var logFile = document.getElementById("logPath").files[0];
+  	if (logFile) {
+  		var r = new FileReader();
+  		r.onload = logLoaded;
+  		r.readAsText(logFile);
+  	}
+  	if (evt)
+  		evt.stopPropagation();
+}
+
+// This is what you do once the whole log file has been loaded.
+/* Basic idea:
+ * read log as array of lines
+ * group lines by battle and event id
+ * re-display each event in user-friendly terms
+ */
+var logLoaded = function(e) {
+	var contents = e.target.result;
+	var lines = contents.split("\n");
+	var battles = buildBattles(lines);
+	var newLog = buildFullLog(battles);
+	document.getElementById("log").innerHTML = newLog;
+}
+
+function buildBattles(lines) {
+	var battles = {};
+	for (var i = 0; i < lines.length; i++) {
+		var line = lines[i];
+		var bIdx = line.search("^Battle (\\d+):");
+		if (bIdx == -1) continue;
+		
+		var bNum = RegExp.$1;
+		var battle = getBattle(battles, bNum);
+		
+		var eIdx = line.search("event Id:(\\d+) ");
+		if (eIdx == -1) {
+			// I think we can throw away anything other than "Team".
+			if (line.search(" Team ") > -1) 
+				battle.addEventless(line);
+		} else {
+			var eventId = RegExp.$1;
+			battle.addEvent(eventId, line);
+		}
+	}
+	return battles;
+}
+
+function getBattle(battles, bNum) {
+	if (!battles[bNum]) battles[bNum] = new Battle();
+	return battles[bNum];
+}
+
+function buildFullLog(battles) {
+	var ret = "";
+	for (var prop in battles) {
+		ret += buildBattleLog(battles[prop], prop);
+	}
+	return ret;
+}
+
+function buildBattleLog(battle, bNum) {
+	var ret = "<h2>Battle "+bNum+"</h2>";
+	ret += "<ul>";
+	ret += "<li>";
+	WoO.effects = [];
+	var noEvent = battle.eventLess;
+	for (var line in noEvent) {
+		ret += noEvent[line] + "<br>";
+	}
+	var events = battle.events;
+	for (var eID in events) {
+		var line = buildEventLog(events[eID], eID, battle);
+		if (line != " " && line.search("^Event ") == -1) line = "Event "+eID+": "+line;
+		ret += line;
+	}
+	ret += "</ul>";
+	return ret;
+}
+
+// Main interpretation of each individual event happens here.
+// Keep throwing "interpreters" at it until one dings.
+// Some interpreters will collapse multiple events by looking ahead in the battle object.
+function buildEventLog(event, eID, battle) {
+	var line = 0;
+	// I tried to do this with a fancy OR statement, but it failed. :-(
+	line =    refreshEventLog(event,eID,battle);	if (line) return line;
+	line =        buyEventLog(event,eID,battle);	if (line) return line;
+	line =    restockEventLog(event,eID,battle);	if (line) return line;
+	line =    unstockEventLog(event,eID,battle);	if (line) return line;
+	line =       drawEventLog(event,eID,battle);	if (line) return line;
+	line =    destroyEventLog(event,eID,battle);	if (line) return line;
+	line = destroyActEventLog(event,eID,battle);	if (line) return line;
+	line =  deactPlayEventLog(event,eID,battle);	if (line) return line;
+	line =  deactHandEventLog(event,eID,battle);	if (line) return line;
+	line = drawByTypeEventLog(event,eID,battle);	if (line) return line;
+	line =       playEventLog(event,eID,battle);	if (line) return line;
+	line =     toHandEventLog(event,eID,battle);	if (line) return line;
+	line =     attackEventLog(event,eID,battle);	if (line) return line;
+	line =    gainResEventLog(event,eID,battle);	if (line) return line;
+	line =    loseResEventLog(event,eID,battle);	if (line) return line;
+	line =   stealResEventLog(event,eID,battle);	if (line) return line;
+	line =  stealCardEventLog(event,eID,battle);	if (line) return line;
+	line =    endTurnEventLog(event,eID,battle);	if (line) return line;
+	line =   nextTurnEventLog(event,eID,battle);	if (line) return line;
+	line =     chargeEventLog(event,eID,battle);	if (line) return line;
+	line =       feedEventLog(event,eID,battle);	if (line) return line;
+	line =       pumpEventLog(event,eID,battle);	if (line) return line;
+	line =   pumpAllyEventLog(event,eID,battle);	if (line) return line;
+	line = unkRebirthEventLog(event,eID,battle);	if (line) return line;
+	line =      wenchEventLog(event,eID,battle);	if (line) return line;
+	line =     summonEventLog(event,eID,battle);	if (line) return line;
+	line =    ransackEventLog(event,eID,battle);	if (line) return line;
+	line =    scrollsEventLog(event,eID,battle);	if (line) return line;
+	line =       riftEventLog(event,eID,battle);	if (line) return line;
+	line =   burglaryEventLog(event,eID,battle);	if (line) return line;
+	line =    miracleEventLog(event,eID,battle);	if (line) return line;
+	line =   copyCardEventLog(event,eID,battle);	if (line) return line;
+	return    defaultEventLog(event,eID,battle);
+}
+
+// Discard RefreshJobs. They tell me nothing.
+function refreshEventLog(event, eID, battle) {
+	var line0 = event[0];
+	var idx = event[0].search("\\|RefreshJob\\|");
+	if (idx == -1) return false;
+	return " "; // apparently an empty string resolves as false. Sigh.
+}
+
+function buyEventLog(event, eID, battle) {
+	var line0 = event[0];
+	var idx = event[0].search("\\|BuyJob card:(\\d+)\\((.*)\\)\\|");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = battle.cardOwners[cardNum];
+	var ret = battle.curPlayer + " buys "+WoO.numAndName(cardNum,cardName);
+	if (who != battle.curPlayer)
+		ret += " from "+who+"'s bank!";
+	WoO.queueBuyEffects(cardName);
+	return ret+"<br>";
+}
+
+function restockEventLog(event, eID, battle) {
+	var line0 = event[0];
+	var idx = line0.search("adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Deck .* origin: (.*)\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "My") ? "Player" : "Foe";
+	var origin = RegExp.$4;
+	if (origin !== "Team.drawBank"     // normal end-of-turn restock
+	 && origin !== "Team.refreshBank") // cards that force a restock, such as Lackey
+		return false;
+	battle.curPlayer = who;
+	battle.cardOwners[cardNum] = who;
+	var ret = WoO.eventLine(battle,ef.stock,cardNum,cardName);
+	return ret + "<br>";
+}
+
+// Anything dropping off the bottom of the bank (I think).
+function unstockEventLog(event, eID, battle) {
+	var line0 = event[0];
+	var idx = line0.search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Bank .* event: BankOutEvent,");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "Enemy") ? "Foe" : "Player";
+	var ret = who + " bank loses "+WoO.numAndName(cardNum,cardName);
+	return ret + "<br>";
+}
+
+function destroyEventLog(event, eID, battle) {
+	if (!event[1]) return false;
+	var idx = event[1].search("adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Trash.*origin: Team.destroy\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "My") ? "Player" : "Foe";
+	var ret = WoO.eventLine(battle,ef.destroy,cardNum,cardName);
+	return ret + "<br>";
+}
+
+// Like destroyEventLog, except the card was on the field.
+function destroyActEventLog(event, eID, battle) {
+	if (!event[4]) return false;
+	var idx = event[0].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) area.*origin: Team.destroy\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "enemy") ? "Foe" : "Player";
+	var ret = WoO.numAndName(cardNum,cardName)+" on "+who+" field is destroyed";
+	// Extra check if this was a Strategem - if so, player gets another turn.
+	// Extra turn *doesn't* happen unless this destroy happened right after a turn ending.
+	if (cardName == "Stratagem" && battle.turnEnding) {
+		battle.extraTurn = true;
+		ret += "; "+who+" gets an extra turn!";
+	}
+	return ret+"<br>"; 
+}
+
+// This seems to happen whenever a card goes from field to inventory.
+// There are at least two variations: one where the add-to-inven happens on [4], and one where it's on [2].
+function deactPlayEventLog(event, eID, battle) {
+	if (event.length != 5 && event.length != 3) return false;
+	var idx = event[0].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) (\\w+) .*origin: Team.deactivate\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var whoFrom = (RegExp.$3 == "player") ? "Player" : "Foe";
+	var whereFrom = (RegExp.$4 == "area") ? "field" : "bank";
+	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Inventory.*origin: Team.deactivate\\)";
+	var lineNum = (event.length == 5) ? 3 : 1;
+	var idxN = event[lineNum].search(pattern);
+	if (cardNum != RegExp.$1) return false;
+	if (cardName != RegExp.$2) return false;
+	var whoOwner = (RegExp.$3 == "My") ? "Player" : "Foe";
+	var ret = WoO.eventLine(battle,ef.deactPlay,cardNum,cardName,whoOwner,whoFrom,whereFrom);
+	if (rebirthEvent(event,+eID+1,battle)) {
+		ret += ", but is saved by "+WoO.name("Shrine of Rebirth")+"!";
+	}
+	// Extra check if this was a Merchant of Time - if so, player gets another turn.
+	// Extra turn *doesn't* happen unless this destroy happened right after a turn ending.
+	if (cardName == "Merchant of Time" && battle.turnEnding) {
+		battle.extraTurn = true;
+		ret += " ..."+who+" gets an extra turn!";
+	}
+	return ret+"<br>"; 
+}
+
+// Detects a Shrine of Rebirth event following the current one, and if so, adjusts following events.
+// Shrine of Rebirth doesn't show in the log; it only shows up as 3 EffectJobs in a row.
+function rebirthEvent(event,eID,battle) {
+	var pattern = "\\|EffectJob\\|";
+	var nEvent0 = battle.events[+eID+0];
+	var nEvent1 = battle.events[+eID+1];
+	var nEvent2 = battle.events[+eID+2];
+	if (   nEvent0 && nEvent0[0].search(pattern) > -1
+		&& nEvent1 && nEvent1[0].search(pattern) > -1
+		&& nEvent2 && nEvent2[0].search(pattern) > -1) {
+		delete battle.events[+eID+0];
+		delete battle.events[+eID+1];
+		delete battle.events[+eID+2];
+		return true;
+	}
+	return false;
+}
+
+// Like deactHand, except this is going from hand to inventory.
+function deactHandEventLog(event, eID, battle) {
+	if (!event[2]) return false;
+	var idx = event[0].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Hand.*origin: Team.deactivate\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var whoFrom = (RegExp.$3 == "My") ? "Player" : "Foe";
+	var idx1 = event[1].search("adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Inventory.*origin: Team.deactivate\\)");
+	if (cardNum != RegExp.$1) return false;
+	if (cardName != RegExp.$2) return false;
+	var whoI = (RegExp.$3 == "My") ? "Player" : "Foe";
+	var ret = WoO.eventLine(battle,ef.deactHand,cardNum,cardName,whoI,whoFrom);
+	return ret + "<br>";
+}
+
+// Bank->Hand specifically. Incantations and some other Endazu cards do this.
+function toHandEventLog(event, eID, battle) {
+	var idx = event[0].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Bank.*origin: Card.onBuy");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "My") ? "Player" : "Foe";
+	battle.curPlayer = who;
+	battle.cardOwners[cardNum] = who;
+	var ret = WoO.eventLine(battle,ef.toHand,cardNum,cardName,who);
+	return ret + "<br>";
+}
+
+function attackEventLog(event, eID, battle) {
+	var idx = event[0].search("\\|AttackJob\\|");
+	if (idx == -1) return false;
+	// DamageJob seems to always follow this.
+	var event1 = battle.events[+eID+1];
+	if (!event1 || event1[0].search("\\|DamageJob\\|") == -1) return false;
+	delete battle.events[+eID+1];
+	// SpendSkullJob *sometimes* follows this.
+	var event2 = battle.events[+eID+2];
+	if (event2 && event2[0].search("\\|SpendSkullJob\\|") > -1)
+		delete battle.events[+eID+2];
+	var ret = WoO.eventLine(battle,ef.attack);
+	return ret + "<br>";
+}
+
+// Never says what the resource was. :-( But this should at least collapse multiple events.
+function gainResEventLog(event, eID, battle) {
+	var idx = event[0].search("\\|GainResourceJob\\|");
+	if (idx == -1) return false;
+	var resCount = 1;
+	while (idx > -1) {
+		var nextEvent = battle.events[+eID+resCount];
+		idx = nextEvent && nextEvent[0].search("\\|GainResourceJob\\|");
+		if (idx > -1) {
+			delete battle.events[+eID+resCount];
+			resCount++;
+		}
+	}
+	var who = (battle.curPlayer) ? battle.curPlayer : "(second player?)";
+	var ret = who+" gains resource x"+resCount;
+//	var ret = WoO.eventLine(battle,ef.resLose);
+	return ret + "<br>";
+}
+
+function loseResEventLog(event, eID, battle) {
+	var idx = event[0].search("\\|LoseResourceJob\\|");
+	if (idx == -1) return false;
+	var ret = WoO.eventLine(battle,ef.resLose);
+	return ret + "<br>";
+}
+
+function stealResEventLog(event, eID, battle) {
+	var idx = event[0].search("\\|StealResourceJob\\|");
+	if (idx == -1) return false;
+	var resCount = 1;
+	while (idx > -1) {
+		var nextEvent = battle.events[+eID+resCount];
+		idx = nextEvent && nextEvent[0].search("\\|StealResourceJob\\|");
+		if (idx > -1) {
+			delete battle.events[+eID+resCount];
+			resCount++;
+		}
+	}
+	var who = battle.curPlayer;
+	var ret = who+" steals resource x"+resCount+"!";
+//	var ret = WoO.eventLine(battle,ef.resLose);
+	return ret + "<br>";
+}
+
+function stealCardEventLog(event, eID, battle) {
+    if (!event[2]) return false;
+    var idx = event[0].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Hand.*Team.draw\\)");
+    if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var whoFrom = (RegExp.$3 == "My") ? "Player" : "Foe";
+    idx = event[1].search("adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Hand.*Team.draw\\)");
+    if (idx == -1) return false;
+	if (cardNum != RegExp.$1) return false;
+	var whoTo = (RegExp.$3 == "My") ? "Player" : "Foe";
+	if (whoFrom == whoTo) return false;
+    var ret = WoO.eventLine(battle,ef.cardSteal,cardNum,cardName,whoFrom);
+	return ret + "<br>";
+}
+
+function endTurnEventLog(event, eID, battle) {
+	var idx = event[0].search("\\|EndTurnJob\\|");
+	if (idx == -1) return false;
+	battle.turnEnding = true;
+	var who = battle.curPlayer ? battle.curPlayer : "First";
+	var ret = "<b>"+who+" turn ends</b>";
+	return ret + "<br>";
+}
+
+function nextTurnEventLog(event, eID, battle) {
+	var idx = event[0].search("\\|NextTurnJob\\|");
+	if (idx == -1) return false;
+	var who = battle.curPlayer;
+	if (!battle.curPlayer) // wasn't set yet - this should mean it's the first turn of the game
+	 	who = "First"; // and don't set curPlayer - we don't know
+	else {
+		who = battle.curPlayer = (who=="Player")?"Foe":"Player";
+		// HOWEVER: if extraTurn, switch it back
+		if (battle.extraTurn) {
+			who = battle.curPlayer = (who=="Player")?"Foe":"Player";
+			battle.extraTurn = false;
+		}
+	} 
+	battle.turnEnding = false;
+	WoO.effects = []; // probably need to clear out anything left here
+	var ret = "<b>"+who+" turn begins</b>";
+	return ret + "<br>";
+}
+
+function drawEventLog(event, eID, battle) {
+	var line0 = event[0];
+	var idx = line0.search("adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Inventory.*Team.draw\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "My") ? "Player" : "Foe";
+	battle.curPlayer = who;
+	battle.cardOwners[cardNum] = who; // we'll need this later
+	var ret = who + " hand draws "+WoO.numAndName(cardNum,cardName)+"<br>";
+	return ret;
+}
+
+// This happens when Valdorian steals a card, or Esra draws an ally; dunno what else triggers it yet
+/* Example of Esra:
+Battle 5: adding card: 60 (War Rat) to: Enemy Inventory |MoveJob card:60 inv->hand| (event Id:194 event: DrawEvent, turn: 5 origin: Team.drawByType)
+Battle 5: remove card: 60 (War Rat) from: Enemy Inventory |MoveJob card:60 inv->hand| (event Id:194 event: DrawEvent, turn: 5 origin: Team.drawByType)
+Battle 5: adding card: 60 (War Rat) to: Enemy Hand |MoveJob card:60 inv->hand| (event Id:194 event: DrawEvent, turn: 5 origin: Team.drawByType)
+*/
+function drawByTypeEventLog(event, eID, battle) {
+	var line0 = event[0];
+	var idx = line0.search("adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Inventory.*Team.drawByType\\)");
+	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who       = (RegExp.$3 == "My") ? "Player" : "Foe";
+	var idx = event[1].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Inventory.*Team.drawByType\\)");
+	if (idx == -1) return false;
+	var whoFrom = (RegExp.$3 == "My") ? "Player" : "Foe";
+	// battle.curPlayer = whoFrom;
+	battle.cardOwners[cardNum] = who; // we'll need this later
+	var ret = who + " hand draws "+WoO.numAndName(cardNum,cardName)+" from "+whoFrom+"'s inventory";
+	if (who !== whoFrom) ret += "!";
+	return ret+"<br>";
+}
+
+function isPlayEvent(event) {
+	if (!event) return false;
+	var idx = event[0].search("\\|PlayJob card:(\\d+)\\((.*)\\)\\|");
+	return (idx > -1);
+}
+
+function playEventLog(event, eID, battle) {
+	if (!isPlayEvent(event)) return false;
+//	var idx = event[0].search("\\|PlayJob card:(\\d+)\\((.*)\\)\\|");
+//	if (idx == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = battle.cardOwners[cardNum];
+	/* I know it's not correct to set current player to who here, because the owner of the card
+	 * is not always the player here (cf.Valdorian). Gonna hope curPlayer is known by now,
+	 * thanks to code in nextTurnEventLog.
+	 */
+	// battle.curPlayer = who;
+	var ret = WoO.eventLine(battle,ef.play,cardNum,cardName,who);
+	WoO.queuePlayEffects(cardName);
+
+	// New plan: look ahead for an event that moves that card; delete it; let other
+	// interpreters handle the rest. Stop looking if you find something that isn't
+	// UpdateCharges (Gilded General) or something that a General would activate.
+	// (GainResource, Attack, Damage, et al.) Don't look too far (infinite loop); 1000
+	// ought to catch the most obnoxious cases (e.g. playing Flower with hundreds of Generals in play).
+	// TODO: Later, we'll probably want to treat everything in between as a possible playEffect.
+	/* Example:
+	remove card: 5 (Ducat) from: Enemy Hand |MoveJob card:5 hand->inv| (event Id:73 event: DeactivateEvent, turn: 0 origin: Team.deactivate)
+    adding card: 5 (Ducat) to: Enemy Inventory |MoveJob card:5 hand->inv| (event Id:73 event: DeactivateEvent, turn: 0 origin: Team.deactivate)
+    clearJob   : |MoveJob card:5 hand->inv| (event Id:73 event: DeactivateEvent, turn: 0 origin: Team.deactivate)
+	*/
+	var moveEventFound = false;
+	var card = gameCards[cardName];
+	var stopLooking = (card && card.playEffects.indexOf(ef.destroy) > -1);
+	var lookAhead = 1;
+	while (!moveEventFound && !stopLooking && lookAhead < 1000) {
+		var nEvent = battle.events[+eID+lookAhead];
+		if (nEvent && nEvent[2] && nEvent[0].search("remove card: "+cardNum+" ") > -1) {
+			moveEventFound = true;
+			delete battle.events[+eID+lookAhead];
+		}
+		
+		if (rebirthEvent(event,+eID+lookAhead,battle)) {
+			ret += ", card is saved by "+WoO.name("Shrine of Rebirth")+"!";
+			return ret + "<br>";
+		}
+
+//		stopLooking = !nEvent && !battle.events[+eID+lookAhead+1]; // "conjured" cards cause an event# to skip
+		// Otherwise, skip a (rather long) list of other effects.
+		if (!stopLooking && nEvent)
+			stopLooking =
+		    (nEvent[0].search("\\|GainResourceJob\\|") == -1
+		  && nEvent[0].search("\\|LoseResourceJob\\|") == -1 // Poem of Blight
+		  && nEvent[0].search("\\|StealResourceJob\\|") == -1 // Swindler, Loquori
+		  && nEvent[0].search("\\|UpdateChargesJob\\|") == -1
+		  && nEvent[0].search("\\|AttackJob\\|") == -1
+		  && nEvent[0].search("\\|DamageJob\\|") == -1
+		  && nEvent[0].search("\\|RefreshJob\\|") == -1 // attacks that destroy something(?)
+		  && nEvent[0].search("\\|FeedJob\\|") == -1 // Serpent's Seal
+		  && nEvent[0].search("\\|HealJob\\|") == -1 // Scribe activated by a General
+		  && nEvent[0].search("\\|SpendFoodJob\\|") == -1 // AI going too fast
+		  && nEvent[0].search("\\|SpendSkullJob\\|") == -1 // AI going too fast
+		  && nEvent[0].search("\\|ClearContextJob\\|") == -1 // AI hitting something with Bloodlust
+		  && nEvent[0].search("\\|SpecialAbilityJob\\|") == -1 // epic coins
+		  && nEvent[0].search("\\|ChangeOwnerJob\\|") == -1 // during Summoning Rift(??)
+		  && nEvent[0].search("\\|SacrificeJob\\|") == -1 // certain Daramek cards, like Feast
+		  //&& nEvent[0].search("\\|EndTurnJob\\|") == -1 // playing many cards at a time??
+		  && nEvent[0].search("\\|BuyJob ") == -1 // playing many cards at a time??
+		  && nEvent[0].search("\\|PlayJob ") == -1 // playing many cards at a time??
+		  && nEvent[0].search("\\|MoveJob .* hand->inv\\|") == -1 // played card getting in front...
+		  && nEvent[0].search("\\|MoveJob .* active->inv\\|") == -1 // played card getting in front...
+		  && nEvent[0].search("\\|MoveJob .* bank->active\\|") == -1 // played card getting in front...
+		  && nEvent[0].search("\\|MoveJob .* hand->active\\|") == -1 // played card getting in front...
+		  && nEvent[0].search("\\|MoveJob .* deck->bank\\|") == -1 // restock, a la Lackey
+		  && nEvent[0].search("\\|MoveJob .* bank->trash\\|") == -1 // stock pushing something out of bank
+		  && nEvent[0].search("\\|MoveJob .* inv->hand\\|") == -1 // draw, a la Vespitole
+		  && nEvent[0].search("\\|MoveJob .* inv->active\\|") == -1 // summon from Fecund Charm
+		  && nEvent[0].search("\\|MoveJob .* deck->hand\\|") == -1 // draw, a la Miracle
+		  && nEvent[0].search("\\|SetContextJob\\|") == -1 // cards that pick others, like Gust
+		  && nEvent[0].search("\\|EffectJob\\|") == -1 // I think other Generals cause this?
+		  );
+		if (!moveEventFound && stopLooking) {
+			console.log ("Tried to match: "+event);
+			console.log ("Stopped looking on: "+nEvent[0]);
+		}
+		lookAhead++;
+	}
+
+	return ret+"<br>";
+}
+
+function chargeEventLog(event, eID, battle) {
+	if (event[0].search("\\|UpdateChargesJob\\|") == -1) return false;
+	// Sometimes there's an effect, too.
+	var event1 = battle.events[+eID+1];
+	if (event1 && event1[0].search("\\|EffectJob\\|") > -1)
+		delete battle.events[+eID+1];
+	return "Something changed charges..."+"<br>";
+}
+
+/* This happens when something is fed - probably an ally.
+ * It doesn't say what, though! :-(
+ */
+ function feedEventLog(event, eID, battle) {
+	if (event[0].search("\\|FeedJob\\|") == -1) return false;
+	var event1 = battle.events[+eID+1];
+	if (!event1 || event1[0].search("\\|SpendFoodJob\\|") == -1) return false;
+	delete battle.events[+eID+1];
+	var who = battle.curPlayer;
+	return who+" fed something..."+"<br>";
+}
+ 
+// As with feed, but the thing fed apparently has charges (e.g. Warding Circle).
+function pumpEventLog(event, eID, battle) {
+	if (event[0].search("\\|FeedJob\\|") == -1) return false;
+	var event1 = battle.events[+eID+1];
+	if (!event1 || event1[0].search("\\|UpdateChargesJob\\|") == -1) return false;
+	var event2 = battle.events[+eID+2];
+	if (!event2 || event2[0].search("\\|EffectJob\\|") == -1) return false;
+	var event3 = battle.events[+eID+3];
+	if (!event3 || event3[0].search("\\|SpendFoodJob\\|") == -1) return false;
+	delete battle.events[+eID+1];
+	delete battle.events[+eID+2];
+	delete battle.events[+eID+3];
+	var who = battle.curPlayer;
+	return who+" pumped something..."+"<br>";
+}
+
+// This happens when an ally is pumped. Slightly different event series.
+function pumpAllyEventLog(event, eID, battle) {
+	if (event[0].search("\\|FeedJob\\|") == -1) return false;
+	var event1 = battle.events[+eID+1];
+	if (!event1 || event1[0].search("\\|UpdateChargesJob\\|") == -1) return false;
+	var event2 = battle.events[+eID+2];
+	if (!event2 || event2[0].search("\\|EffectJob\\|") == -1) return false;
+	var event3 = battle.events[+eID+3];
+	if (!event3 || event3[0].search("\\|HealJob\\|") == -1) return false;
+	var event4 = battle.events[+eID+4];
+	if (!event4 || event4[0].search("\\|SpendFoodJob\\|") == -1) return false;
+	delete battle.events[+eID+1];
+	delete battle.events[+eID+2];
+	delete battle.events[+eID+3];
+	delete battle.events[+eID+4];
+	var who = battle.curPlayer;
+	return who+" pumped an ally..."+"<br>";
+}
+
+// Detects unknown Rebirth saves (something sacrificed, but not identified in the log).
+// 
+function unkRebirthEventLog(event, eID, battle) {
+	if (!rebirthEvent(event,eID,battle)) return false;
+	ret = "Previous card is saved by "+WoO.name("Shrine of Rebirth")+"!";
+	return ret+"<br>"; 
+}
+
+// Another event I hope to not "hard code" as much, if I see a pattern.
+// 7 lines for TavernWench.refresh; 5 for Team.drawById.
+function wenchEventLog(event, eID, battle) {
+	if (event.length != 7 && event.length != 5) return false;
+	if (event[0].search("remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) area .*origin: (.*)\\)") == -1)
+		return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who       = (RegExp.$3 == "player") ? "Player" : "Foe";
+	var whoElse   = (RegExp.$3 == "player") ? "Foe" : "Player";
+	var origin = RegExp.$4;
+	if (origin == "TavernWench.refresh") origin = "Tavern Wench";
+	if (origin == "Team.drawById") origin = "Seduce";
+	var ret = who+"'s "+WoO.numAndName(cardNum,cardName)+" seduced by "+whoElse+"'s "+origin+"!";
+	return ret+"<br>"; 
+}
+
+// And another. Here, I hope the pattern arises for anything that "summons" cards.
+function summonEventLog(event, eID, battle) {
+	if (!event[5]) return false;
+	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Inventory .*origin: ";
+//	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Inventory .*origin: UnderworldBarge.deactivated";
+	var idx = event[0].search(pattern)
+	if (idx == -1)	return false;
+	var cardNum0 = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who      = (RegExp.$3 == "My") ? "Player" : "Foe";
+	
+	var count = 1;
+	while (idx > -1) {
+		var nextEvent = battle.events[+eID+(count*2)];
+		idx = nextEvent && nextEvent[0].search(pattern);
+		if (idx > -1) {
+			delete battle.events[+eID+(count*2)];
+			count++;
+		}
+	}
+	var ret = who+" summons "+WoO.name(cardName)+" x"+count;
+	return ret + "<br>";
+}
+
+// Ransack appears to work unlike anything else.
+function ransackEventLog(event, eID, battle) {
+	if (!event[4]) return false;
+	// TODO Likely need to change this if Ransack ever played from hand (like if Theo saves it)
+	var pattern = "remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Bank .*origin: ";
+	if (event[0].search(pattern) == -1) return false;
+	var cardNum0 = RegExp.$1;
+	var cardName = RegExp.$2; if (cardName != "Ransack") return false;
+	
+	var stopLooking = false;
+	var lookAhead = 1;
+	var saidDiscard = false;
+	var ret = "";
+	var who;
+	pattern = "remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Hand .*origin: Ransack.process\\)"; 
+	while (!stopLooking && lookAhead < 1000) {
+		var nEvent = battle.events[+eID+lookAhead];
+		var idx = nEvent && nEvent[0].search(pattern);
+		if (idx > -1) {
+			cardNum = RegExp.$1;
+			cardName = RegExp.$2;
+			who   = (RegExp.$3 == "Enemy") ? "Foe" : "Player";
+			if (!saidDiscard)
+				ret += who+" discards ";
+			ret += WoO.numAndName(cardNum,cardName)+", ";
+			saidDiscard = true;
+			delete battle.events[+eID+lookAhead];
+		}
+		if (nEvent && nEvent[0].search("\\|ChangeOwnerJob\\|") > -1) {
+			stopLooking = true;
+			delete battle.events[+eID+lookAhead];
+		}
+		lookAhead++;
+	}
+	// The next card played has changed owners. Don't delete that playEvent though.
+	while (!isPlayEvent(battle.events[+eID+lookAhead])) lookAhead++;
+	cardNum = RegExp.$1;
+	cardName = RegExp.$2;
+	ret += "keeps "+ WoO.numAndName(cardNum,cardName);
+	battle.cardOwners[cardNum] = who;
+	return ret+"<br>";
+}
+
+// Sibylline Scrolls are fairly close to Ransack, though.
+// Cull the Herd seems to look the same as well.
+function scrollsEventLog(event, eID, battle) {
+	if (event.length != 3) return false;
+	var pattern = "remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Hand .*origin: (.*)\\)";
+	if (event[0].search(pattern) == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "Enemy") ? "Foe" : "Player";
+	var origin = RegExp.$4;
+	if (origin != "SibyllineScrolls.process" && origin != "CullTheHerd.process") return false;
+	var ret = who+" discards "+WoO.numAndName(cardNum,cardName)+", ";
+
+	var nEvent = battle.events[+eID+1];
+	var idx = nEvent[0].search(pattern);
+	cardNum = RegExp.$1;
+	cardName = RegExp.$2;
+	ret += WoO.numAndName(cardNum,cardName)+", ";
+	delete battle.events[+eID+1];
+
+	// The next card played was the chosen one. Don't delete that playEvent though.
+	var lookAhead = 2;
+	while (!isPlayEvent(battle.events[+eID+lookAhead])) lookAhead++;
+	cardNum = RegExp.$1;
+	cardName = RegExp.$2;
+	ret += "chooses "+ WoO.numAndName(cardNum,cardName);
+	return ret+"<br>";
+}
+
+function riftEventLog(event, eID, battle) {
+	if (event.length != 4) return false;
+	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Deck .*origin: SummoningRift.play\\)";
+	if (event[0].search(pattern) == -1) return false;
+	var cardNum = RegExp.$1;
+	var cardName = RegExp.$2;
+	var who = (RegExp.$3 == "Enemy") ? "Foe" : "Player";
+	var ret = who+" summons "+WoO.numAndName(cardNum,cardName);
+	
+	var lookAhead = 1;
+	var nEvent = battle.events[+eID+lookAhead];
+	while (nEvent[0].search(pattern) > -1) {
+		cardNum = RegExp.$1;
+		cardName = RegExp.$2;
+		ret += ", "+WoO.numAndName(cardNum,cardName);
+		delete battle.events[+eID+1];
+	}
+	return ret+"<br>";
+}
+
+// Burglary, likewise, appears to work unlike anything else.
+function burglaryEventLog(event, eID, battle) {
+	var pattern = "remove card: (\\d+) \\(([^\\)]*)\\) from: (\\w+) Bank \\|BurglaryJob\\|"; 
+	if (event[0].search(pattern) == -1) return false;
+	cardNum = RegExp.$1;
+	cardName = RegExp.$2;
+	who     = (RegExp.$3 == "My") ? "Player" : "Foe";
+	whoElse = (RegExp.$3 == "My") ? "Foe" : "Player";
+	ret = whoElse+" robs "+WoO.numAndName(cardNum,cardName)+" from "+who+"!";
+	return ret+"<br>";
+}
+
+function miracleEventLog(event, eID, battle) {
+	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Deck .* origin: (.*)\\)";
+	var idx = event[0].search(pattern);
+	if (idx == -1) return false;
+	cardNum = RegExp.$1;
+	cardName = RegExp.$2;
+	who     = (RegExp.$3 == "Enemy") ? "Foe" : "Player";
+	if (RegExp.$4 !== "Miracle.play") return false;
+	ret = "God gives "+who+" "+WoO.numAndName(cardNum,cardName)+"!";
+	return ret+"<br>";
+}
+
+/* Example with Forgery:
+Battle 4: adding card: 419 (Hedge Guardian) to: Enemy Inventory |CopyCardJob| (event Id:420 event: Event, turn: 9)
+Battle 4: remove card: 419 (Hedge Guardian) from: Enemy Inventory |CopyCardJob| (event Id:420 event: Event, turn: 9)
+Battle 4: adding card: 419 (Hedge Guardian) to: Enemy Hand |CopyCardJob| (event Id:420 event: Event, turn: 9)
+Battle 4: clearJob : |CopyCardJob| (event Id:420 event: Event, turn: 9)
+*/
+function copyCardEventLog(event, eID, battle) {
+	if (event.length != 4) return false;
+	var pattern = "adding card: (\\d+) \\(([^\\)]*)\\) to: (\\w+) Hand \\|CopyCardJob\\|";
+	var idx = event[2].search(pattern);
+	if (idx == -1) return false;
+	cardNum = RegExp.$1;
+	cardName = RegExp.$2;
+	who     = (RegExp.$3 == "Enemy") ? "Foe" : "Player";
+	ret = "Copy of "+WoO.numAndName(cardNum,cardName)+" added to "+who+"'s hand!";
+	return ret+"<br>";
+}
+
+function defaultEventLog(event, eID, battle) {
+	var ret = "";
+	ret += "Event "+eID+":";
+	ret += "<ul>";
+	for (var line in event) {
+		ret += "<li>"+event[line];
+	}
+	ret += "</ul>";
+	return ret;
+}
+
+function Battle() {
+	this.eventLess = [];
+	this.events = {};
+	this.cardOwners = {};
+	this.curPlayer = null;
+	this.extraTurn = false;
+	this.turnEnding = false;
+	this.addEventless = function(line) {this.eventLess[this.eventLess.length] = line;};
+	this.addEvent = function(id,line) {
+		if (!this.events[id]) this.events[id] = [];
+		var lines = this.events[id];
+		lines[lines.length] = line;
+	};
+}
+
+// Overwrite deck line with real card names.
+function showDecks(lines,idx) {
+	var line = lines[idx];
+    var teamIdx = line.search("Team ");
+	if (teamIdx == -1) return;
+	
+	var team = line.substr(teamIdx+5,1);
+	var teamStr = (team == "1") ? "Your foe" : "You";
+	var ret = teamStr + " deck: ";
+	
+	var cards = line.substr(teamIdx+8).split(", ");
+	var cardNums = {};
+	// Collapse repeating numbers.
+	for (var i = 0; i < cards.length; i++) {
+		var cardNum = cards[i];
+		if (cardNum == "") break;
+		var counter = cardNums[cardNum];
+		cardNums[cardNum] = (counter) ? counter+1 : 1;
+	}
+	
+	for (prop in cardNums) {
+		var cardName = cardNumbers[prop];
+		var counter = cardNums[prop];
+		if (!cardName) cardName = prop;
+		ret += cardName;
+		if (counter > 1) ret += " x"+counter;
+		ret += ", ";
+	}
+	
+	// ret += cards.join(",");
+	lines[idx] = ret;
+	return true;
+}
+
+function joinNonBlank(lines,sep) {
+	var ret = "";
+	var first = true;
+	for (i = 0; i < lines.length; i++) {
+		if (lines[i].length > 0) {
+			if (!first) ret += sep;
+			first = false;
+			ret += lines[i];
+		}
+	}
+	return ret;
+}
+
+</script>
+</body>
+</html>
+
